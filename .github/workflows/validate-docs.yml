@@ -1,0 +1,168 @@
+name: Валидация артефактов практики
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Проверка документов
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # Профиль проверки. В эталоне документы содержат заготовки {{ ... }}, и
+    # профиль template требует их наличия, а профиль team требует заполнения.
+    # Один и тот же файл лежит и в эталоне, и в репозиториях команд, поэтому
+    # профиль задаётся переменной репозитория: в эталоне VALIDATION_PROFILE=template,
+    # в репозиториях команд переменной нет и остаётся team.
+    env:
+      PROFILE: ${{ vars.VALIDATION_PROFILE || 'team' }}
+
+    steps:
+      - name: Получить код
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Установить Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Установить зависимости проверки
+        run: python -m pip install --disable-pip-version-check "pyyaml==6.0.3" "jsonschema==4.26.0"
+
+      # Проверка требует заполненных документов, а репозиторий команды минуту назад
+      # создан из эталона, где все четыре документа — заготовки {{ ... }}. Проверять
+      # весь корень после создания нельзя: первая же проверка сообщала бы о заготовках,
+      # которые никто не оставлял, и команда встречала бы репозиторий красной галочкой
+      # на чужой ошибке.
+      #
+      # Поэтому проверяется то, что изменение действительно могло испортить: состав
+      # изменений против прежней головы ветки, а решение выносит сам валидатор — он
+      # знает, какие пути читает профиль team. Копии этого правила в воркфлоу быть не
+      # должно, scripts/sync_template.py проверяет, что её нет.
+      #
+      # Тот же круг снимает вторую беду: защита ветки справедлива к ветке, а не к
+      # файлу, и состав меняется автоматически через data/meta.yml. Первая же смена
+      # капитана упиралась бы в собственные заготовки, и репозиторий, который выглядит
+      # созданным, оказался бы заморожен до конца практики. Свои правки документов
+      # команда сдаёт запросом, который их трогает, поэтому подставные документы
+      # по-прежнему не попадут в main.
+      - name: Определить круг проверки
+        id: scope
+        env:
+          BEFORE: ${{ github.event.before }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          unknown() {
+            echo "value=full" >> "$GITHUB_OUTPUT"
+            echo "$1" >> "$GITHUB_STEP_SUMMARY"
+          }
+          if [ "${EVENT}" = "pull_request" ]; then
+            # Пустой diff у запроса — это «не разобрались», а не «нечего
+            # проверять»: запрос может быть от старой ветки, и пропустить его
+            # проверку нельзя. Именно здесь проверка обязательная, поэтому
+            # сомнительный случай разбирается в её пользу.
+            if ! changed="$(git diff --name-only "origin/main...HEAD")"; then
+              unknown "не удалось определить состав изменений, проверяем всё"
+              exit 0
+            fi
+            if [ -z "${changed}" ]; then
+              unknown "изменений не найдено, проверяем всё"
+              exit 0
+            fi
+          # `before` из нулей означает, что ветку только что создали. Так выглядит
+          # первый Push в свежем репозитории из эталона: сравнивать не с чем, и
+          # содержимое main ещё никто не писал. Ветка с нулями допустима только
+          # здесь: у Pull Request поля `before` нет вовсе, и проверять его
+          # записью в «нечего» значило бы пропустить обязательную проверку.
+          elif [ "${BEFORE}" = "0000000000000000000000000000000000000000" ]; then
+            echo "value=none" >> "$GITHUB_OUTPUT"
+            {
+              echo "ветка только что создана: сравнивать не с чем, проверять нечего"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          elif ! changed="$(git diff --name-only "${BEFORE}" HEAD)"; then
+            unknown "не удалось определить состав изменений, проверяем всё"
+            exit 0
+          fi
+          printf '%s\n' "${changed}" > changed.txt
+          value="$(python scripts/validate_docs.py --scope changed.txt)"
+          echo "value=${value}" >> "$GITHUB_OUTPUT"
+          {
+            echo "круг проверки: ${value}, изменённые файлы:"
+            printf '%s\n' "${changed}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Проверить обязательные файлы, секции и заготовки
+        if: steps.scope.outputs.value == 'full'
+        run: python scripts/validate_docs.py --root . --profile "$PROFILE" --ci
+
+      - name: Проверить метаданные команды
+        # На созданном репозитории в data/meta.yml ещё лежит эталонный
+        # `id: team-template-00`, и полная проверка метаданных дала бы
+        # meta.id_mismatch о чужом файле. Поэтому на том запуске, где круг
+        # проверки — none, она не выполняется вовсе.
+        if: steps.scope.outputs.value != 'none'
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, "scripts")
+          from validate_docs import validate
+
+          report = validate(Path(".").resolve(), os.environ.get("PROFILE", "team"))
+          meta_findings = [f for f in report.findings if f.path == "data/meta.yml"]
+          if not meta_findings:
+              print("метаданные команды корректны")
+          for finding in meta_findings:
+              print(f"::error file=data/meta.yml,title={finding.code}::{finding.message}")
+          sys.exit(1 if any(f.level == "error" for f in meta_findings) else 0)
+          PY
+
+      # Считается по заготовкам, а не по наличию файлов: у свежего репозитория все
+      # четыре файла на месте с первого коммита, и этап, выведенный из их наличия,
+      # всегда был «04_Формализация_ТЗ» — в том числе на пустом репозитории.
+      - name: Отчёт о состоянии команды
+        if: always()
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, "scripts")
+          from validate_docs import REQUIRED_TEAM_FILES, validate
+
+          report = validate(Path(".").resolve(), os.environ.get("PROFILE", "team"))
+          unfinished = []
+          for relative in REQUIRED_TEAM_FILES:
+              leftover = any(
+                  finding.path == relative and finding.code.startswith("placeholder.")
+                  for finding in report.findings
+              )
+              if leftover:
+                  unfinished.append(relative)
+          print(f"Заполнено документов: {len(REQUIRED_TEAM_FILES) - len(unfinished)} из {len(REQUIRED_TEAM_FILES)}")
+          if unfinished:
+              print("Ещё с заготовками: " + ", ".join(unfinished))
+          else:
+              print("Заготовок не осталось.")
+          PY
+
+      - name: Сводка в Summary
+        if: always() && steps.scope.outputs.value == 'full'
+        run: |
+          python scripts/validate_docs.py --root . --profile "$PROFILE" >> "$GITHUB_STEP_SUMMARY" || true
