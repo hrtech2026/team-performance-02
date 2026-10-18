@@ -795,13 +795,12 @@ def check_meta(root: Path, report: Report, profile: Profile) -> None:
             report.add("error", "meta.member", "data/meta.yml", f"участник {index}: нет `login`")
         else:
             logins.append(login)
-        if not isinstance(member.get("name"), str) or not str(member.get("name")).strip():
-            report.add(
-                "warning",
-                "meta.member_name",
-                "data/meta.yml",
-                f"участник {index}: не заполнено `name`, команда не попадёт в состав на витрине",
-            )
+        # `name` здесь не проверяется намеренно: блок `members` перезаписывается
+        # по заявке, имя в нём всегда пустое, а имя участника пишется в таблице
+        # состава README и оттуда попадает на витрину. Проверка, требовавшая
+        # заполнить `name` в файле, который пульт стирает, предупреждала четыре
+        # раза на каждую команду и была ложной — состав на витрине при этом был.
+        # Отсутствие имени в README ловит `readme.roster.name`.
         if not isinstance(role, str) or not role.strip():
             report.add("error", "meta.member", "data/meta.yml", f"участник {index}: нет `role`")
         else:
