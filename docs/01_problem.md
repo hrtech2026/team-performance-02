@@ -2,8 +2,8 @@
 doc: 01_problem
 stage: idea
 team: team-performance-02
-updated: 2026-10-20
-authors: ["@daglar-dragomirov"]
+updated: 2026-11-12
+authors: ["@daglar-dragomirov", "@sebas909909", "@pasharyabov2002-oss"]
 ---
 
 # Опора — паспорт противоречия

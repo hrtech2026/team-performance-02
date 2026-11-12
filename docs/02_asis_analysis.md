@@ -2,8 +2,8 @@
 doc: 02_asis_analysis
 stage: as_is
 team: team-performance-02
-updated: 2026-11-05
-authors: ["@daglar-dragomirov"]
+updated: 2026-11-12
+authors: ["@daglar-dragomirov", "@sebas909909"]
 ---
 
 # Опора — анализ AS-IS
