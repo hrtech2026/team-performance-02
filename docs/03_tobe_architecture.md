@@ -3,7 +3,7 @@ doc: 03_tobe_architecture
 stage: to_be
 team: team-performance-02
 updated: 2026-11-12
-authors: ["@daglar-dragomirov", "@sebas909909"]
+authors: ["@daglar-dragomirov", "@sebas909909", "@Nedopirat"]
 ---
 
 # Опора — целевой процесс и архитектура
